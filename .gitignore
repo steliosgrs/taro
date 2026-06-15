@@ -1,0 +1,25 @@
+# Rust build artifacts
+/server/target/
+
+# Databases (generated at runtime)
+**/*.db
+**/*.db-shm
+**/*.db-wal
+
+# Environment
+.env
+**/.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Personal / planning — NOT for publication
+/notes/
+/.obsidian/
+
+# OS / editor
+.DS_Store
+*.swp

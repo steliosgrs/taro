@@ -73,3 +73,30 @@ pub struct RunDetail {
     pub params: HashMap<String, String>,
     pub tags: HashMap<String, String>,
 }
+
+// ----- scalar metrics DTOs (M2) ----------------------------------------------
+#[derive(Debug, Deserialize)]
+pub struct ScalarMetricInput {
+    pub key: String,
+    pub step: i64,
+    pub value: f64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LogMetricsRequest {
+    pub metrics: Vec<ScalarMetricInput>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LogMetricsResponse {
+    pub accepted: usize,
+}
+
+/// A scalar metric row as read back (used to build grouped series responses).
+#[derive(Debug, sqlx::FromRow)]
+pub struct MetricRow {
+    pub key: String,
+    pub step: i64,
+    pub value: f64,
+    pub ts: String,
+}

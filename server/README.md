@@ -5,10 +5,11 @@ Curve-native experiment tracker — POC. Rust (axum + sqlx + SQLite).
 See [../docs/poc-design.md](../docs/poc-design.md) for the full spec and
 [../docs/architecture.md](../docs/architecture.md) for diagrams.
 
-## Status: M1 — server skeleton
+## Status: M2 — scalar metric path
 Implemented: health check, experiment get-or-create/list/get, run start/detail/finalize
-(params + tags), embedded migrations, static bearer-token auth stub.
-Not yet: scalar metrics (M2), curve metrics + compare (M3), artifacts (M5).
+(params + tags), **bulk scalar metric logging + grouped series read**, embedded
+migrations, static bearer-token auth stub.
+Not yet: curve metrics + compare (M3), artifacts (M5).
 
 ## Run
 
@@ -31,6 +32,8 @@ Config via env (see `.env.example`): `TARO_DATABASE_URL`, `TARO_BIND`, `TARO_API
 | POST | `/api/v1/runs` | `{ "experiment", "name?", "params?", "tags?" }` → starts run |
 | GET | `/api/v1/runs/{id}` | run + params + tags |
 | PATCH | `/api/v1/runs/{id}` | `{ "status", "ended_at?" }` → finalize |
+| POST | `/api/v1/runs/{id}/metrics` | `{ "metrics": [{ "key", "step", "value" }] }` → bulk log (run must be `running`) |
+| GET | `/api/v1/runs/{id}/metrics?key=` | scalar series grouped by key (optional `key` filter) |
 
 If `TARO_API_KEY` is set, send `Authorization: Bearer <key>` on `/api/v1/*`.
 

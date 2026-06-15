@@ -2,6 +2,7 @@
 
 pub mod experiments;
 pub mod health;
+pub mod metrics;
 pub mod runs;
 
 use crate::{auth, state::AppState};
@@ -19,6 +20,7 @@ pub fn router(state: AppState) -> Router {
         .route("/experiments/{id}", get(experiments::get))
         .route("/runs", post(runs::create))
         .route("/runs/{id}", get(runs::get).patch(runs::patch))
+        .route("/runs/{id}/metrics", post(metrics::log).get(metrics::list))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_api_key,

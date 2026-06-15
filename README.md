@@ -1,8 +1,10 @@
+<img src="./docs/images/taro_logo.png" width="35%" height="35%" style="display: block; margin-left: auto; margin-right: auto;"/>
+
 # Taro
 
 **A curve-native experiment tracker for ML.** Self-hosted, fast, and built to store
 the metrics MLflow can't compare — precision-recall curves, per-class AP, and other
-vector/curve metrics — as *data*, not frozen PNGs.
+vector/curve metrics — as _data_, not frozen PNGs.
 
 > **Status: early POC / work in progress.** The Rust server skeleton (M1) is running.
 > Scalar metrics (M2), curve metrics + comparison (M3), the Python SDK (M4), artifacts

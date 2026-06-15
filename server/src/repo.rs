@@ -3,7 +3,7 @@
 //! Concrete functions for the POC; extracting these behind repository traits
 //! (to swap SQLite ↔ Postgres) is a planned refinement, not needed for M1.
 
-use crate::models::{Experiment, Run};
+use crate::models::{Experiment, MetricRow, Run, ScalarMetricInput};
 use chrono::Utc;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
@@ -182,4 +182,55 @@ pub async fn update_run_status(
         return Ok(None);
     }
     get_run(pool, id).await
+}
+
+// ----- scalar metrics (M2) ----------------------------------------------------
+/// Bulk-insert scalar metric points for a run in a single transaction.
+/// Server stamps `ts`; returns the number of points written.
+pub async fn insert_scalar_metrics(
+    pool: &SqlitePool,
+    run_id: &str,
+    metrics: &[ScalarMetricInput],
+) -> Result<usize, sqlx::Error> {
+    let ts = now();
+    let mut tx = pool.begin().await?;
+    for m in metrics {
+        sqlx::query(
+            "INSERT INTO scalar_metric (run_id, key, step, value, ts) VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(run_id)
+        .bind(&m.key)
+        .bind(m.step)
+        .bind(m.value)
+        .bind(&ts)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(metrics.len())
+}
+
+/// Read scalar points for a run, optionally filtered to one key, ordered by step.
+pub async fn get_scalar_metrics(
+    pool: &SqlitePool,
+    run_id: &str,
+    key: Option<&str>,
+) -> Result<Vec<MetricRow>, sqlx::Error> {
+    match key {
+        Some(k) => sqlx::query_as::<_, MetricRow>(
+            "SELECT key, step, value, ts FROM scalar_metric
+             WHERE run_id = ? AND key = ? ORDER BY step ASC, id ASC",
+        )
+        .bind(run_id)
+        .bind(k)
+        .fetch_all(pool)
+        .await,
+        None => sqlx::query_as::<_, MetricRow>(
+            "SELECT key, step, value, ts FROM scalar_metric
+             WHERE run_id = ? ORDER BY key ASC, step ASC, id ASC",
+        )
+        .bind(run_id)
+        .fetch_all(pool)
+        .await,
+    }
 }

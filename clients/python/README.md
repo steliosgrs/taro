@@ -29,7 +29,9 @@ overlay = taro.compare_curves([run_a, run_b], key="pr_curve")  # data, not a PNG
 
 - M4: `init`, `start_run`, `log_metric`, `log_curve`, `compare_curves`.
 - M5: `log_artifact` (multipart upload) and `register_artifact` (existing URI).
-- Framework adapters (`taro.integrations.*`) in **M6**.
+- M6: `taro.integrations.ultralytics.attach(model, experiment=...)` — logs
+  per-epoch scalars, PR / per-class-AP curves, and best.pt from a YOLO run.
+  De-risk attribute paths first with `scripts/validate_yolo_adapter.py`.
 
 ## Try it
 

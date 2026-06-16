@@ -1,4 +1,5 @@
 /target
+/taro_blobs
 *.db
 *.db-shm
 *.db-wal

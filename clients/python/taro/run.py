@@ -81,6 +81,38 @@ class Run:
         except TaroHTTPError as e:  # never-crash
             log.warning("taro: failed to log curve '%s' (%s)", key, e)
 
+    def log_artifact(
+        self,
+        path: str,
+        name: Optional[str] = None,
+        media_type: Optional[str] = None,
+    ) -> None:
+        """Upload a local file's bytes to the run's blob store (M5)."""
+        if not self.ok:
+            return
+        try:
+            self.client.post_file(
+                f"/runs/{self.run_id}/artifacts", path, name=name, media_type=media_type
+            )
+        except (TaroHTTPError, OSError) as e:  # never-crash (incl. missing file)
+            log.warning("taro: failed to log artifact '%s' (%s)", path, e)
+
+    def register_artifact(
+        self,
+        name: str,
+        uri: str,
+        media_type: Optional[str] = None,
+        size_bytes: Optional[int] = None,
+    ) -> None:
+        """Record an artifact that already lives at a URI (e.g. `s3://…`)."""
+        if not self.ok:
+            return
+        body = {"name": name, "uri": uri, "media_type": media_type, "size_bytes": size_bytes}
+        try:
+            self.client.post(f"/runs/{self.run_id}/artifacts", body)
+        except TaroHTTPError as e:  # never-crash
+            log.warning("taro: failed to register artifact '%s' (%s)", name, e)
+
     # ----- lifecycle ----------------------------------------------------------
     def finish(self, status: str = "finished") -> None:
         if not self.ok:

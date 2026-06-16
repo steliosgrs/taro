@@ -27,9 +27,9 @@ overlay = taro.compare_curves([run_a, run_b], key="pr_curve")  # data, not a PNG
 
 ## Status / scope
 
-- M4 (this): `init`, `start_run`, `log_metric`, `log_curve`, `compare_curves`.
-- Artifacts (`log_artifact`) land in **M5**; framework adapters
-  (`taro.integrations.*`) in **M6**.
+- M4: `init`, `start_run`, `log_metric`, `log_curve`, `compare_curves`.
+- M5: `log_artifact` (multipart upload) and `register_artifact` (existing URI).
+- Framework adapters (`taro.integrations.*`) in **M6**.
 
 ## Try it
 

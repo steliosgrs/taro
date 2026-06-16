@@ -1,5 +1,6 @@
 //! HTTP router assembly.
 
+pub mod artifacts;
 pub mod curves;
 pub mod experiments;
 pub mod health;
@@ -23,6 +24,7 @@ pub fn router(state: AppState) -> Router {
         .route("/runs/{id}", get(runs::get).patch(runs::patch))
         .route("/runs/{id}/metrics", post(metrics::log).get(metrics::list))
         .route("/runs/{id}/curves", post(curves::log).get(curves::list))
+        .route("/runs/{id}/artifacts", post(artifacts::create).get(artifacts::list))
         .route("/curves/compare", get(curves::compare))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),

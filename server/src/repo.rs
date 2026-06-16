@@ -4,7 +4,9 @@
 //! (to swap SQLite ↔ Postgres) is a planned refinement, not needed for M1.
 
 use crate::error::AppError;
-use crate::models::{CurveInput, CurveRow, Experiment, MetricRow, Run, ScalarMetricInput};
+use crate::models::{
+    Artifact, CurveInput, CurveRow, Experiment, MetricRow, Run, ScalarMetricInput,
+};
 use chrono::Utc;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
@@ -320,4 +322,50 @@ pub async fn get_curve_one(
         .bind(step)
         .fetch_optional(pool)
         .await
+}
+
+// ----- artifacts (M5) ---------------------------------------------------------
+/// Record artifact metadata (bytes already persisted in the blob store, or
+/// living at an external URI). Returns the stored row.
+pub async fn insert_artifact(
+    pool: &SqlitePool,
+    run_id: &str,
+    name: &str,
+    uri: &str,
+    media_type: Option<&str>,
+    size_bytes: Option<i64>,
+) -> Result<Artifact, sqlx::Error> {
+    let art = Artifact {
+        id: new_id(),
+        run_id: run_id.to_string(),
+        name: name.to_string(),
+        uri: uri.to_string(),
+        media_type: media_type.map(|s| s.to_string()),
+        size_bytes,
+        created_at: now(),
+    };
+    sqlx::query(
+        "INSERT INTO artifact (id, run_id, name, uri, media_type, size_bytes, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&art.id)
+    .bind(&art.run_id)
+    .bind(&art.name)
+    .bind(&art.uri)
+    .bind(&art.media_type)
+    .bind(art.size_bytes)
+    .bind(&art.created_at)
+    .execute(pool)
+    .await?;
+    Ok(art)
+}
+
+pub async fn get_artifacts(pool: &SqlitePool, run_id: &str) -> Result<Vec<Artifact>, sqlx::Error> {
+    sqlx::query_as::<_, Artifact>(
+        "SELECT id, run_id, name, uri, media_type, size_bytes, created_at
+         FROM artifact WHERE run_id = ? ORDER BY created_at ASC, id ASC",
+    )
+    .bind(run_id)
+    .fetch_all(pool)
+    .await
 }

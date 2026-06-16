@@ -153,3 +153,26 @@ pub struct CurveRow {
     pub data: String,
     pub ts: String,
 }
+
+// ----- artifacts DTOs (M5) ----------------------------------------------------
+/// An artifact record — metadata only; the bytes live in the blob store.
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct Artifact {
+    pub id: String,
+    pub run_id: String,
+    pub name: String,
+    pub uri: String,
+    pub media_type: Option<String>,
+    pub size_bytes: Option<i64>,
+    pub created_at: String,
+}
+
+/// Register an artifact that already lives somewhere (e.g. `s3://…`) without
+/// uploading bytes — the JSON alternative to a multipart upload.
+#[derive(Debug, Deserialize)]
+pub struct ArtifactRegister {
+    pub name: String,
+    pub uri: String,
+    pub media_type: Option<String>,
+    pub size_bytes: Option<i64>,
+}

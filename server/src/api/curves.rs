@@ -1,7 +1,7 @@
 //! Curve metric endpoints (M3) — the differentiator: a metric value can be a
 //! curve/vector, stored as structured data so N runs can be overlaid.
 
-use crate::{error::AppError, models::*, repo, state::AppState};
+use crate::{error::AppError, models::*, state::AppState};
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -66,9 +66,7 @@ pub async fn log(
     Path(run_id): Path<String>,
     Json(body): Json<LogCurvesRequest>,
 ) -> Result<(StatusCode, Json<LogMetricsResponse>), AppError> {
-    let run = repo::get_run(&st.pool, &run_id)
-        .await?
-        .ok_or(AppError::NotFound)?;
+    let run = st.store.get_run(&run_id).await?.ok_or(AppError::NotFound)?;
 
     // Same invariant as scalars: only a running run accepts metrics.
     if run.status != RUN_RUNNING {
@@ -89,7 +87,7 @@ pub async fn log(
         validate_curve_data(&c.key, &c.data)?;
     }
 
-    let accepted = repo::insert_curve_metrics(&st.pool, &run_id, &body.curves).await?;
+    let accepted = st.store.insert_curve_metrics(&run_id, &body.curves).await?;
     Ok((StatusCode::ACCEPTED, Json(LogMetricsResponse { accepted })))
 }
 
@@ -99,11 +97,9 @@ pub async fn list(
     Path(run_id): Path<String>,
     Query(q): Query<CurveQuery>,
 ) -> Result<Json<CurvesResponse>, AppError> {
-    repo::get_run(&st.pool, &run_id)
-        .await?
-        .ok_or(AppError::NotFound)?;
+    st.store.get_run(&run_id).await?.ok_or(AppError::NotFound)?;
 
-    let rows = repo::get_curve_metrics(&st.pool, &run_id, q.key.as_deref(), q.step).await?;
+    let rows = st.store.get_curve_metrics(&run_id, q.key.as_deref(), q.step).await?;
     let curves = rows.into_iter().map(curve_out).collect::<Result<_, _>>()?;
     Ok(Json(CurvesResponse { run_id, curves }))
 }
@@ -143,7 +139,7 @@ pub async fn compare(
     let mut y_label = None;
     let mut runs = Vec::new();
     for rid in run_ids {
-        let Some(row) = repo::get_curve_one(&st.pool, rid, key, step).await? else {
+        let Some(row) = st.store.get_curve_one(rid, key, step).await? else {
             continue; // run absent or has no curve for this key/step
         };
         // Axis labels come from the first matched curve (they agree across runs).
@@ -151,7 +147,7 @@ pub async fn compare(
             x_label = row.x_label.clone();
             y_label = row.y_label.clone();
         }
-        let run_name = repo::get_run(&st.pool, rid).await?.and_then(|r| r.name);
+        let run_name = st.store.get_run(rid).await?.and_then(|r| r.name);
         runs.push(CompareRun {
             run_id: row.run_id,
             run_name,

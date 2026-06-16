@@ -1,6 +1,6 @@
 //! Experiment endpoints.
 
-use crate::{error::AppError, models::*, repo, state::AppState};
+use crate::{error::AppError, models::*, state::AppState};
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -16,13 +16,13 @@ pub async fn create(
     if name.is_empty() {
         return Err(AppError::BadRequest("experiment name is required".into()));
     }
-    let exp = repo::get_or_create_experiment(&st.pool, name).await?;
+    let exp = st.store.get_or_create_experiment(name).await?;
     Ok((StatusCode::CREATED, Json(exp)))
 }
 
 /// GET /api/v1/experiments
 pub async fn list(State(st): State<AppState>) -> Result<Json<Vec<Experiment>>, AppError> {
-    Ok(Json(repo::list_experiments(&st.pool).await?))
+    Ok(Json(st.store.list_experiments().await?))
 }
 
 /// GET /api/v1/experiments/{id}
@@ -30,7 +30,8 @@ pub async fn get(
     State(st): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Experiment>, AppError> {
-    repo::get_experiment(&st.pool, &id)
+    st.store
+        .get_experiment(&id)
         .await?
         .map(Json)
         .ok_or(AppError::NotFound)

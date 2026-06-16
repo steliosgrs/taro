@@ -78,9 +78,10 @@ Smoke test: `python examples/validate_m3.py` (needs the server up).
 
 POC milestones **M0–M6 complete**: wire contract, server skeleton, scalar path,
 curve path + `/curves/compare`, Python SDK, artifacts + blob store, Ultralytics
-adapter. Postgres (vs SQLite), repository-trait extraction, CLI, and a UI are
-post-POC. Airflow orchestration is explicitly **out of scope** (the server must
-never orchestrate — see `docs/airflow-integration.md`).
+adapter. Data access is behind the `Store` trait (`src/store.rs`, `SqliteStore`
+impl) — a `PostgresStore` is the remaining productionization step. CLI and a UI
+are post-POC. Airflow orchestration is explicitly **out of scope** (the server
+must never orchestrate — see `docs/airflow-integration.md`).
 
 ## Workflow notes
 

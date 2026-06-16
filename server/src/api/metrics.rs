@@ -1,6 +1,6 @@
 //! Scalar metric endpoints (M2).
 
-use crate::{error::AppError, models::*, repo, state::AppState};
+use crate::{error::AppError, models::*, state::AppState};
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -35,9 +35,7 @@ pub async fn log(
     Path(run_id): Path<String>,
     Json(body): Json<LogMetricsRequest>,
 ) -> Result<(StatusCode, Json<LogMetricsResponse>), AppError> {
-    let run = repo::get_run(&st.pool, &run_id)
-        .await?
-        .ok_or(AppError::NotFound)?;
+    let run = st.store.get_run(&run_id).await?.ok_or(AppError::NotFound)?;
 
     // Invariant: only a running run accepts metrics.
     if run.status != RUN_RUNNING {
@@ -59,7 +57,7 @@ pub async fn log(
         }
     }
 
-    let accepted = repo::insert_scalar_metrics(&st.pool, &run_id, &body.metrics).await?;
+    let accepted = st.store.insert_scalar_metrics(&run_id, &body.metrics).await?;
     Ok((StatusCode::ACCEPTED, Json(LogMetricsResponse { accepted })))
 }
 
@@ -70,11 +68,9 @@ pub async fn list(
     Query(q): Query<MetricQuery>,
 ) -> Result<Json<MetricsResponse>, AppError> {
     // 404 if the run doesn't exist (vs. silently returning empty).
-    repo::get_run(&st.pool, &run_id)
-        .await?
-        .ok_or(AppError::NotFound)?;
+    st.store.get_run(&run_id).await?.ok_or(AppError::NotFound)?;
 
-    let rows = repo::get_scalar_metrics(&st.pool, &run_id, q.key.as_deref()).await?;
+    let rows = st.store.get_scalar_metrics(&run_id, q.key.as_deref()).await?;
 
     let mut series: BTreeMap<String, Vec<Point>> = BTreeMap::new();
     for r in rows {

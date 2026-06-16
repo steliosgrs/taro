@@ -7,8 +7,8 @@ mod config;
 mod db;
 mod error;
 mod models;
-mod repo;
 mod state;
+mod store;
 
 use config::Config;
 use state::AppState;
@@ -30,7 +30,7 @@ async fn main() -> anyhow::Result<()> {
 
     let pool = db::connect(&cfg.database_url).await?;
     let state = AppState {
-        pool,
+        store: Arc::new(store::SqliteStore::new(pool)),
         api_key: cfg.api_key,
         blob: Arc::new(blob::LocalFs::new(cfg.blob_root)),
     };

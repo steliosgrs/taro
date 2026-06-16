@@ -4,7 +4,7 @@
 //! blob store) **or** a JSON body registering an existing URI (no bytes). Either
 //! way the DB stores only metadata; bytes never enter the DB. `GET` lists them.
 
-use crate::{error::AppError, models::*, repo, state::AppState};
+use crate::{error::AppError, models::*, state::AppState};
 use axum::{
     extract::{FromRequest, Multipart, Path, Request, State},
     http::{header::CONTENT_TYPE, StatusCode},
@@ -17,9 +17,7 @@ pub async fn create(
     Path(run_id): Path<String>,
     req: Request,
 ) -> Result<(StatusCode, Json<Artifact>), AppError> {
-    let run = repo::get_run(&st.pool, &run_id)
-        .await?
-        .ok_or(AppError::NotFound)?;
+    let run = st.store.get_run(&run_id).await?.ok_or(AppError::NotFound)?;
 
     // Same invariant as metrics/curves: only a running run accepts logging.
     if run.status != RUN_RUNNING {
@@ -80,7 +78,10 @@ async fn upload_multipart(st: &AppState, run: &Run, req: Request) -> Result<Arti
         .await
         .map_err(AppError::Other)?;
 
-    Ok(repo::insert_artifact(&st.pool, &run.id, &name, &uri, media.as_deref(), Some(size)).await?)
+    Ok(st
+        .store
+        .insert_artifact(&run.id, &name, &uri, media.as_deref(), Some(size))
+        .await?)
 }
 
 /// Register an artifact that already lives at a URI (no bytes uploaded).
@@ -91,15 +92,16 @@ async fn register_uri(st: &AppState, run_id: &str, req: Request) -> Result<Artif
     if body.name.trim().is_empty() || body.uri.trim().is_empty() {
         return Err(AppError::BadRequest("name and uri are required".into()));
     }
-    Ok(repo::insert_artifact(
-        &st.pool,
-        run_id,
-        &body.name,
-        &body.uri,
-        body.media_type.as_deref(),
-        body.size_bytes,
-    )
-    .await?)
+    Ok(st
+        .store
+        .insert_artifact(
+            run_id,
+            &body.name,
+            &body.uri,
+            body.media_type.as_deref(),
+            body.size_bytes,
+        )
+        .await?)
 }
 
 /// GET /api/v1/runs/{id}/artifacts
@@ -107,8 +109,6 @@ pub async fn list(
     State(st): State<AppState>,
     Path(run_id): Path<String>,
 ) -> Result<Json<Vec<Artifact>>, AppError> {
-    repo::get_run(&st.pool, &run_id)
-        .await?
-        .ok_or(AppError::NotFound)?;
-    Ok(Json(repo::get_artifacts(&st.pool, &run_id).await?))
+    st.store.get_run(&run_id).await?.ok_or(AppError::NotFound)?;
+    Ok(Json(st.store.get_artifacts(&run_id).await?))
 }

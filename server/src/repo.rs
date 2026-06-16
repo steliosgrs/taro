@@ -3,7 +3,8 @@
 //! Concrete functions for the POC; extracting these behind repository traits
 //! (to swap SQLite ↔ Postgres) is a planned refinement, not needed for M1.
 
-use crate::models::{Experiment, MetricRow, Run, ScalarMetricInput};
+use crate::error::AppError;
+use crate::models::{CurveInput, CurveRow, Experiment, MetricRow, Run, ScalarMetricInput};
 use chrono::Utc;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
@@ -233,4 +234,90 @@ pub async fn get_scalar_metrics(
         .fetch_all(pool)
         .await,
     }
+}
+
+// ----- curve metrics (M3) -----------------------------------------------------
+/// Columns read back for any curve query (keep in sync with `CurveRow`).
+const CURVE_COLS: &str =
+    "run_id, key, step, curve_type, x_label, y_label, data, ts";
+
+/// Bulk-insert curve metric records for a run in a single transaction. The typed
+/// `data` is serialized to JSON text for the `data` column; server stamps `ts`.
+/// Returns AppError (not just sqlx::Error) because JSON serialization can fail.
+pub async fn insert_curve_metrics(
+    pool: &SqlitePool,
+    run_id: &str,
+    curves: &[CurveInput],
+) -> Result<usize, AppError> {
+    let ts = now();
+    let mut tx = pool.begin().await?;
+    for c in curves {
+        let data_json =
+            serde_json::to_string(&c.data).map_err(|e| AppError::Other(e.into()))?;
+        sqlx::query(
+            "INSERT INTO curve_metric
+                 (run_id, key, step, curve_type, x_label, y_label, data, ts)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(run_id)
+        .bind(&c.key)
+        .bind(c.step)
+        .bind(&c.curve_type)
+        .bind(&c.x_label)
+        .bind(&c.y_label)
+        .bind(&data_json)
+        .bind(&ts)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(curves.len())
+}
+
+/// Read a run's curves, optionally filtered to one key and/or one step.
+/// `(? IS NULL OR col = ?)` makes each filter optional with a single query.
+pub async fn get_curve_metrics(
+    pool: &SqlitePool,
+    run_id: &str,
+    key: Option<&str>,
+    step: Option<i64>,
+) -> Result<Vec<CurveRow>, sqlx::Error> {
+    let sql = format!(
+        "SELECT {CURVE_COLS} FROM curve_metric
+         WHERE run_id = ?
+           AND (? IS NULL OR key = ?)
+           AND (? IS NULL OR step = ?)
+         ORDER BY key ASC, step ASC, id ASC"
+    );
+    sqlx::query_as::<_, CurveRow>(&sql)
+        .bind(run_id)
+        .bind(key)
+        .bind(key)
+        .bind(step)
+        .bind(step)
+        .fetch_all(pool)
+        .await
+}
+
+/// Fetch one curve for `(run_id, key)` for overlay: the row at `step`, or the
+/// highest step (`latest`) when `step` is None. None if the run has no such curve.
+pub async fn get_curve_one(
+    pool: &SqlitePool,
+    run_id: &str,
+    key: &str,
+    step: Option<i64>,
+) -> Result<Option<CurveRow>, sqlx::Error> {
+    let sql = format!(
+        "SELECT {CURVE_COLS} FROM curve_metric
+         WHERE run_id = ? AND key = ? AND (? IS NULL OR step = ?)
+         ORDER BY step DESC, id DESC
+         LIMIT 1"
+    );
+    sqlx::query_as::<_, CurveRow>(&sql)
+        .bind(run_id)
+        .bind(key)
+        .bind(step)
+        .bind(step)
+        .fetch_optional(pool)
+        .await
 }

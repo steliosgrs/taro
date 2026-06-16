@@ -100,3 +100,56 @@ pub struct MetricRow {
     pub value: f64,
     pub ts: String,
 }
+
+// ----- curve metrics DTOs (M3 — the differentiator) ---------------------------
+/// One named line in a multi-line curve (e.g. per-class PR), sharing the
+/// record's `x`.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct CurveSeries {
+    pub name: String,
+    pub y: Vec<f64>,
+}
+
+/// Curve payload: one shared `x`, plus **either** a single `y` **or** multiple
+/// `series`. Optional `labels` name a categorical/index x-axis. Validated for
+/// structure only (equal lengths, finite, non-empty) — never ML correctness.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct CurveData {
+    pub x: Vec<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y: Option<Vec<f64>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub series: Option<Vec<CurveSeries>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub labels: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CurveInput {
+    pub key: String,
+    pub step: i64,
+    /// Open enum (`pr | roc | per_class | generic_xy`); never rejected.
+    pub curve_type: String,
+    pub x_label: Option<String>,
+    pub y_label: Option<String>,
+    pub data: CurveData,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LogCurvesRequest {
+    pub curves: Vec<CurveInput>,
+}
+
+/// A curve row as read back. `data` is the raw JSON text column; handlers parse
+/// it back into nested JSON for responses. `run_id` is needed by `/curves/compare`.
+#[derive(Debug, sqlx::FromRow)]
+pub struct CurveRow {
+    pub run_id: String,
+    pub key: String,
+    pub step: i64,
+    pub curve_type: String,
+    pub x_label: Option<String>,
+    pub y_label: Option<String>,
+    pub data: String,
+    pub ts: String,
+}

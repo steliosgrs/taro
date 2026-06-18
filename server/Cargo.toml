@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 description = "Taro — curve-native experiment tracker (POC server)"
 
+[lib]
+name = "taro_server"
+path = "src/lib.rs"
+
 [[bin]]
 name = "taro-server"
 path = "src/main.rs"
@@ -12,7 +16,7 @@ path = "src/main.rs"
 axum = { version = "0.8", features = ["multipart"] }
 async-trait = "0.1"
 tokio = { version = "1", features = ["full"] }
-sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "macros", "migrate"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "postgres", "macros", "migrate"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v7"] }
@@ -22,3 +26,9 @@ anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tower-http = { version = "0.6", features = ["trace"] }
+
+[dev-dependencies]
+# M7 integration tests: drive the real router in-process (no network).
+tower = { version = "0.5", features = ["util"] }   # ServiceExt::oneshot
+http-body-util = "0.1"                              # collect response bodies
+tempfile = "3"                                      # per-test temp DB + blob root

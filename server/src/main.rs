@@ -1,17 +1,7 @@
-//! Taro server entrypoint (M1: health + experiment/run lifecycle, SQLite).
+//! Taro server entrypoint — a thin binary over the `taro_server` library crate.
 
-mod api;
-mod auth;
-mod blob;
-mod config;
-mod db;
-mod error;
-mod models;
-mod state;
-mod store;
+use taro_server::{api, blob, config::Config, db, state::AppState};
 
-use config::Config;
-use state::AppState;
 use std::sync::Arc;
 
 #[tokio::main]
@@ -28,9 +18,8 @@ async fn main() -> anyhow::Result<()> {
         auth = cfg.api_key.is_some(), blob_root = %cfg.blob_root.display(),
         "starting taro-server");
 
-    let pool = db::connect(&cfg.database_url).await?;
     let state = AppState {
-        store: Arc::new(store::SqliteStore::new(pool)),
+        store: db::build_store(&cfg.database_url).await?,
         api_key: cfg.api_key,
         blob: Arc::new(blob::LocalFs::new(cfg.blob_root)),
     };

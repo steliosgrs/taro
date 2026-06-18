@@ -11,6 +11,14 @@ requires-python = ">=3.9"
 license = { text = "Apache-2.0" }
 dependencies = []  # POC core is standard-library only
 
+[project.optional-dependencies]
+test = ["pytest"]  # local-only test suite (no CI); `uv pip install -e ".[test]"`
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["taro*"]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: needs a live server (set TARO_TEST_SERVER_URL)",
+]

@@ -13,7 +13,7 @@ curves can be overlaid — the thing MLflow can't do.
 | `clients/python/` | Python SDK (`taro`) + framework adapters. |
 | `scripts/` | `validate_yolo_adapter.py` — Ultralytics integration probe. |
 | `docs/` | Design (`poc-design.md` is canonical, `architecture.md`, `airflow-integration.md`). |
-| `notes/` | Obsidian notes (study guide, understanding-checks) — **gitignored**. |
+| `notes/` | Private Obsidian vault — **gitignored**. See `notes/INDEX.md` for the tree. |
 
 ## Run the server
 

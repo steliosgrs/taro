@@ -11,7 +11,6 @@ import os
 import urllib.error
 import urllib.parse
 import urllib.request
-import uuid
 from typing import Any, Dict, Optional
 
 
@@ -75,31 +74,28 @@ class Client:
         name: Optional[str] = None,
         media_type: Optional[str] = None,
     ) -> Any:
-        """Upload a local file as multipart/form-data (proxy-through-server)."""
+        """Stream a local file as the raw request body (no full read into memory).
+
+        Metadata travels out-of-band: the artifact name as the ``name`` query
+        param, the media type as ``Content-Type``. urllib sends the open file
+        handle in fixed-size blocks, so a large checkpoint never sits in memory.
+        """
         fname = name or os.path.basename(file_path)
         media_type = media_type or mimetypes.guess_type(fname)[0] or "application/octet-stream"
-        with open(file_path, "rb") as f:
-            payload = f.read()
+        size = os.path.getsize(file_path)
 
-        boundary = f"----taro{uuid.uuid4().hex}"
-        head = (
-            f"--{boundary}\r\n"
-            f'Content-Disposition: form-data; name="file"; filename="{fname}"\r\n'
-            f"Content-Type: {media_type}\r\n\r\n"
-        ).encode()
-        body = head + payload + f"\r\n--{boundary}--\r\n".encode()
-
-        headers = {"Content-Type": f"multipart/form-data; boundary={boundary}"}
+        query = urllib.parse.urlencode({"name": fname})
+        url = f"{self.base_url}/api/v1{path}?{query}"
+        headers = {"Content-Type": media_type, "Content-Length": str(size)}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
-        req = urllib.request.Request(
-            f"{self.base_url}/api/v1{path}", data=body, method="POST", headers=headers
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                raw = resp.read()
-                return json.loads(raw) if raw else {}
-        except urllib.error.HTTPError as e:
-            raise TaroHTTPError(e.code, e.read().decode(errors="replace")) from e
-        except urllib.error.URLError as e:
-            raise TaroHTTPError(0, str(e.reason)) from e
+        with open(file_path, "rb") as f:
+            req = urllib.request.Request(url, data=f, method="POST", headers=headers)
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    raw = resp.read()
+                    return json.loads(raw) if raw else {}
+            except urllib.error.HTTPError as e:
+                raise TaroHTTPError(e.code, e.read().decode(errors="replace")) from e
+            except urllib.error.URLError as e:
+                raise TaroHTTPError(0, str(e.reason)) from e

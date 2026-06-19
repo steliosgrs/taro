@@ -76,12 +76,15 @@ Smoke test: `python examples/validate_m3.py` (needs the server up).
 
 ## Status
 
-POC milestones **M0–M6 complete**: wire contract, server skeleton, scalar path,
+POC milestones **M0–M9 complete**: wire contract, server skeleton, scalar path,
 curve path + `/curves/compare`, Python SDK, artifacts + blob store, Ultralytics
-adapter. Data access is behind the `Store` trait (`src/store.rs`, `SqliteStore`
-impl) — a `PostgresStore` is the remaining productionization step. CLI and a UI
-are post-POC. Airflow orchestration is explicitly **out of scope** (the server
-must never orchestrate — see `docs/airflow-integration.md`).
+adapter, integration test suite (M7), `PostgresStore` engine parity (M8), and
+**streaming artifact upload** (M9 — request body flows to the `BlobStore` chunk
+by chunk; the SDK streams the file handle, never reading it whole). Data access
+is behind the `Store` trait (`src/store.rs`); both `SqliteStore` and
+`PostgresStore` are proven at parity. CLI (M10) and a UI are post-POC. Airflow
+orchestration is explicitly **out of scope** (the server must never orchestrate
+— see `docs/airflow-integration.md`).
 
 ## Workflow notes
 

@@ -1,10 +1,11 @@
 //! M7 — artifacts + blob store.
 //!
-//! Wire shape (see src/api/artifacts.rs): POST `/runs/{id}/artifacts` is either
-//! a multipart upload (bytes → blob store, size derived from bytes) OR a JSON
-//! body registering an existing URI (no bytes). Either way the DB stores only
-//! metadata. GET lists. The blob layout strips a name to its basename, so a
-//! traversal name (`../x`) is confined under the blob root.
+//! Wire shape (see src/api/artifacts.rs): POST `/runs/{id}/artifacts` is one of
+//! a **raw streamed body** (bytes → blob store, name in `?name=`, size counted
+//! as written), a multipart upload, OR a JSON body registering an existing URI
+//! (no bytes). Either way the DB stores only metadata. GET lists. The blob
+//! layout strips a name to its basename, so a traversal name (`../x`) is
+//! confined under the blob root.
 
 mod common;
 use axum::http::StatusCode;
@@ -50,6 +51,49 @@ async fn multipart_upload_persists() {
     let arr = list.as_array().unwrap();
     assert_eq!(arr.len(), 1);
     assert_eq!(arr[0]["name"], "best.pt");
+}
+
+#[tokio::test]
+async fn stream_upload_persists() {
+    let app = TestApp::spawn().await;
+    let run_id = start_run(&app).await;
+
+    // Raw body = the file bytes; name in the query, media type in Content-Type.
+    let bytes = b"\x00\x01streamed-weights\xff";
+    let (status, art) = app
+        .post_stream(
+            &format!("/api/v1/runs/{run_id}/artifacts?name=best.pt"),
+            "application/octet-stream",
+            bytes,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // Size is counted as the stream is written, not supplied up front.
+    assert_eq!(art["name"], "best.pt");
+    assert_eq!(art["media_type"], "application/octet-stream");
+    assert_eq!(art["size_bytes"], bytes.len() as i64);
+    assert!(art["uri"].as_str().unwrap().starts_with("file://"));
+
+    let (_, list) = app.get(&format!("/api/v1/runs/{run_id}/artifacts")).await;
+    assert_eq!(list.as_array().unwrap().len(), 1);
+    assert_eq!(list[0]["name"], "best.pt");
+}
+
+#[tokio::test]
+async fn stream_upload_requires_name() {
+    let app = TestApp::spawn().await;
+    let run_id = start_run(&app).await;
+
+    // No ?name= -> the server can't name the blob, so it's a bad request.
+    let (status, _) = app
+        .post_stream(
+            &format!("/api/v1/runs/{run_id}/artifacts"),
+            "application/octet-stream",
+            b"orphan-bytes",
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

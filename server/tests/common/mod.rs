@@ -227,4 +227,26 @@ impl TestApp {
         let value = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
         (status, value)
     }
+
+    /// POST a raw streaming upload (M9): the body *is* the file bytes; the name
+    /// rides in `?name=` and the media type in `Content-Type`. Mirrors the SDK.
+    pub async fn post_stream(
+        &self,
+        uri: &str,
+        media_type: &str,
+        bytes: &[u8],
+    ) -> (StatusCode, serde_json::Value) {
+        let req = Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header("content-type", media_type)
+            .body(Body::from(bytes.to_vec()))
+            .unwrap();
+
+        let resp = self.router.clone().oneshot(req).await.expect("router oneshot");
+        let status = resp.status();
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let value = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+        (status, value)
+    }
 }

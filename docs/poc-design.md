@@ -108,7 +108,7 @@ This contract is the thing everything keys off — **freeze it first (M0).**
 | POST | `/runs/{id}/tags` | Upsert tags |
 | POST | `/runs/{id}/metrics` | Bulk **scalar** metrics |
 | POST | `/runs/{id}/curves` | Log **curve** metric(s) |
-| POST | `/runs/{id}/artifacts` | Upload (multipart) or register URI |
+| POST | `/runs/{id}/artifacts` | Upload (streamed raw body w/ `?name=`, or multipart) or register URI |
 | GET | `/runs/{id}` | Run detail |
 | GET | `/runs/{id}/metrics?key=` | Scalar series |
 | GET | `/runs/{id}/curves?key=&step=` | Curve(s) |
@@ -241,6 +241,6 @@ Thin HTTP client, ships in the Python package. Headline commands: `taro run ls`,
 - **DB for day 1:** SQLite (zero-ops solo) vs Postgres (target). Recommend SQLite-via-sqlx with Postgres-compatible SQL.
 - **Auth:** static bearer-token stub in one middleware, even for POC.
 - **Step semantics:** is `step` always epoch, or epoch + global-iteration? Pick one canonical `step`.
-- **Artifact upload:** proxy-through-server for POC; presigned URLs deferred.
+- **Artifact upload:** proxy-through-server, **streamed** (request body → `BlobStore` chunk by chunk; size counted server-side). Large checkpoints never buffer whole in the SDK or server. Presigned URLs deferred.
 - **JSONB curve math** (interpolation to a common x-grid for overlay): return raw in POC, align client-side; server-side interpolation is future work.
 - **Out of POC scope:** UI/frontend, Airflow integration, confusion-matrix type, model serving.

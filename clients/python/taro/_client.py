@@ -67,6 +67,20 @@ class Client:
     def patch(self, path: str, body: dict) -> Any:
         return self._request("PATCH", path, body=body)
 
+    def health(self) -> Any:
+        """GET `/health` — liveness probe (sits outside the `/api/v1` prefix)."""
+        req = urllib.request.Request(
+            f"{self.base_url}/health", method="GET", headers=self._headers()
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                raw = resp.read()
+                return json.loads(raw) if raw else {}
+        except urllib.error.HTTPError as e:
+            raise TaroHTTPError(e.code, e.read().decode(errors="replace")) from e
+        except urllib.error.URLError as e:
+            raise TaroHTTPError(0, str(e.reason)) from e
+
     def post_file(
         self,
         path: str,

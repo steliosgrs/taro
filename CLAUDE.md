@@ -50,6 +50,24 @@ overlay = taro.compare_curves([a, b], key="pr_curve")   # data, not a PNG
 
 Smoke test: `python examples/validate_m3.py` (needs the server up).
 
+## CLI (M10)
+
+Installing the SDK exposes a `taro` console command (also `python -m taro`) — a
+thin read/inspect client over the REST API. Logging stays in training code (the
+SDK); the CLI is for looking at what's there. Config via `--url` (env `TARO_URL`,
+default `http://localhost:8080`) and `--api-key` (env `TARO_API_KEY`); `--json`
+emits the raw response. Source: `clients/python/taro/cli.py`.
+
+```bash
+taro health
+taro experiments list                       # also: experiments create <name> | get <id>
+taro runs get <id>                          # detail incl. params + tags
+taro runs metrics <id> [--key K]            # scalar series
+taro runs curves <id> [--key K] [--step S]  # curve metrics
+taro runs artifacts <id>
+taro compare A,B --key pr_curve             # the overlay, as a table
+```
+
 ## REST API (`/api/v1`, frozen wire contract — see `docs/poc-design.md §4`)
 
 `POST /experiments` · `POST /runs` · `PATCH /runs/{id}` · `GET /runs/{id}` ·
@@ -80,11 +98,12 @@ POC milestones **M0–M9 complete**: wire contract, server skeleton, scalar path
 curve path + `/curves/compare`, Python SDK, artifacts + blob store, Ultralytics
 adapter, integration test suite (M7), `PostgresStore` engine parity (M8), and
 **streaming artifact upload** (M9 — request body flows to the `BlobStore` chunk
-by chunk; the SDK streams the file handle, never reading it whole). Data access
-is behind the `Store` trait (`src/store.rs`); both `SqliteStore` and
-`PostgresStore` are proven at parity. CLI (M10) and a UI are post-POC. Airflow
-orchestration is explicitly **out of scope** (the server must never orchestrate
-— see `docs/airflow-integration.md`).
+by chunk; the SDK streams the file handle, never reading it whole), and the
+**`taro` CLI** (M10 — read/inspect client in the SDK; see the CLI section above).
+Data access is behind the `Store` trait (`src/store.rs`); both `SqliteStore` and
+`PostgresStore` are proven at parity. A UI is post-POC. Airflow orchestration is
+explicitly **out of scope** (the server must never orchestrate — see
+`docs/airflow-integration.md`).
 
 ## Workflow notes
 

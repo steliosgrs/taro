@@ -14,6 +14,9 @@ dependencies = []  # POC core is standard-library only
 [project.optional-dependencies]
 test = ["pytest"]  # local-only test suite (no CI); `uv pip install -e ".[test]"`
 
+[project.scripts]
+taro = "taro.cli:main"  # M10 CLI; also runnable as `python -m taro`
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["taro*"]

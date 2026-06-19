@@ -11,6 +11,8 @@ per-class lines as `pr_curve_per_class`.
     python clients/python/examples/iris_sklearn.py           # terminal 2
 """
 
+import os
+
 import numpy as np
 from sklearn.datasets import load_iris
 from sklearn.ensemble import RandomForestClassifier
@@ -71,7 +73,7 @@ def log_model(name, clf, params, X_train, X_test, y_train, y_test, class_names):
 
 
 def main():
-    taro.init("http://localhost:8080")
+    taro.init(os.environ.get("TARO_URL", "http://localhost:8080"))
     data = load_iris()
     class_names = list(data.target_names)
     X_train, X_test, y_train, y_test = train_test_split(

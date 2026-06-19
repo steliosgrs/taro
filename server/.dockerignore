@@ -1,0 +1,9 @@
+# Keep the build context small and reproducible: never ship local build
+# artifacts, the dev database, blobs, or secrets into the image.
+target/
+taro.db
+taro.db-*
+taro_blobs/
+.env
+*.md
+tests/

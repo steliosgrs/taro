@@ -1,0 +1,63 @@
+# Taro — one-command playground.
+#
+#   docker compose up --build              # Postgres + server on :8080
+#   docker compose --profile seed up --build   # also load the Iris demo runs
+#   docker compose down -v                 # stop and wipe volumes
+#
+# The server image works with either engine; this compose wires it to Postgres
+# (proven at parity with SQLite) to mirror a real deployment. For a single
+# container with SQLite instead, just `docker run` the server image on its own.
+name: taro
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: taro
+      POSTGRES_PASSWORD: taro
+      POSTGRES_DB: taro
+    volumes:
+      - taro_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U taro -d taro"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  server:
+    build:
+      context: ./server
+    environment:
+      TARO_DATABASE_URL: postgres://taro:taro@db:5432/taro
+      TARO_BIND: 0.0.0.0:8080
+      TARO_BLOB_ROOT: /data/blobs
+      RUST_LOG: taro_server=info,tower_http=info
+      # Set TARO_API_KEY here (and pass --api-key to the CLI) to require auth.
+    ports:
+      - "8080:8080"
+    volumes:
+      - taro_blobs:/data
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  # Opt-in: `--profile seed`. Runs once, populates two demo runs, then exits.
+  seed:
+    profiles: ["seed"]
+    build:
+      context: ./clients/python
+    environment:
+      TARO_URL: http://server:8080
+    depends_on:
+      server:
+        condition: service_healthy
+    restart: "no"
+
+volumes:
+  taro_pgdata:
+  taro_blobs:

@@ -6,9 +6,10 @@
 the metrics MLflow can't compare — precision-recall curves, per-class AP, and other
 vector/curve metrics — as _data_, not frozen PNGs.
 
-> **Status: early POC / work in progress.** The Rust server skeleton (M1) is running.
-> Scalar metrics (M2), curve metrics + comparison (M3), the Python SDK (M4), artifacts
-> (M5), and the Ultralytics/YOLO adapter (M6) are next. See [docs/poc-design.md](docs/poc-design.md).
+> **Status: POC complete (M0–M10).** Rust server, scalar + curve metrics with
+> `/curves/compare`, the Python SDK, artifacts + blob store, the Ultralytics/YOLO
+> adapter, Postgres engine parity, streaming uploads, and the `taro` CLI are all in.
+> A web UI is next. See [docs/poc-design.md](docs/poc-design.md).
 
 ## Why
 
@@ -30,19 +31,33 @@ See [docs/architecture.md](docs/architecture.md) for diagrams.
 ## Repository layout
 
 ```
-server/      Rust server (curve-native tracking backend)
-clients/     Python SDK + CLI + framework adapters   (coming with M4)
-deploy/      docker-compose / deployment              (coming with M5)
-docs/        design + architecture documentation
-scripts/     dev tooling (e.g. YOLO adapter validation probe)
-examples/    usage examples                            (coming with M4)
+server/              Rust server (curve-native tracking backend) + Dockerfile
+clients/python/      Python SDK + CLI + framework adapters (+ seed Dockerfile)
+docs/                design + architecture documentation
+scripts/             dev tooling (e.g. YOLO adapter validation probe)
+docker-compose.yml   one-command playground (server + Postgres + demo seed)
 ```
 
-## Quick start (server)
+## Quick start (Docker)
+
+The fastest way to play with Taro — server + Postgres + two demo runs with
+overlayable PR curves, in one command:
+
+```bash
+docker compose --profile seed up --build   # server on :8080, loads the Iris demo
+curl localhost:8080/health
+curl "localhost:8080/api/v1/experiments"
+docker compose down -v                      # stop and wipe volumes
+```
+
+Drop `--profile seed` to start an empty server. The seed container runs once and
+exits; the server keeps running. Blobs and Postgres data persist in named volumes.
+
+## Quick start (server, from source)
 
 ```bash
 cd server
-cargo run            # listens on 0.0.0.0:8080, creates ./taro.db
+cargo run            # listens on 0.0.0.0:8080, creates ./taro.db (SQLite)
 curl localhost:8080/health
 ```
 

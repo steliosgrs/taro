@@ -103,6 +103,7 @@ This contract is the thing everything keys off — **freeze it first (M0).**
 |---|---|---|
 | POST | `/experiments` | Create / get-or-create |
 | POST | `/runs` | Start a run |
+| GET | `/runs?experiment_id=&status=&limit=` | List runs, newest-first (filters optional; M12) |
 | PATCH | `/runs/{id}` | Finalize / update status |
 | POST | `/runs/{id}/params` | Bulk params (immutable) |
 | POST | `/runs/{id}/tags` | Upsert tags |
@@ -113,6 +114,12 @@ This contract is the thing everything keys off — **freeze it first (M0).**
 | GET | `/runs/{id}/metrics?key=` | Scalar series |
 | GET | `/runs/{id}/curves?key=&step=` | Curve(s) |
 | GET | `/curves/compare?run_ids=a,b&key=&step=` | **Overlay** — N runs' curves for one key |
+| POST/GET | `/documents` (`?namespace=&name=`) | Config registry: create-or-get / list handles (M13) |
+| GET | `/documents/{id}` | Document handle + version history |
+| POST | `/documents/{id}/versions` | Publish a version (content-addressed; identical body deduped) |
+| GET | `/versions/{id}` | Version detail (body as nested JSON) |
+| GET | `/versions/{id}/runs` | Reverse lookup — runs launched from a version |
+| POST/GET | `/runs/{id}/documents` | Link / list a run's documents (role-tagged) |
 
 ### 4.2 Start a run
 ```jsonc

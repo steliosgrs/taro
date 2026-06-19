@@ -10,7 +10,8 @@
 //! engine-generic suite re-runs against Postgres to prove parity.
 
 use crate::models::{
-    Artifact, CurveInput, CurveRow, Experiment, MetricRow, Run, ScalarMetricInput,
+    Artifact, CurveInput, CurveRow, Document, DocumentVersion, Experiment, MetricRow, Run,
+    ScalarMetricInput,
 };
 use async_trait::async_trait;
 use chrono::Utc;
@@ -49,6 +50,7 @@ pub trait Store: Send + Sync {
         name: Option<&str>,
         params: &HashMap<String, serde_json::Value>,
         tags: &HashMap<String, String>,
+        config_version_id: Option<&str>,
     ) -> Result<Run, sqlx::Error>;
     async fn get_run(&self, id: &str) -> Result<Option<Run>, sqlx::Error>;
     /// Read a run's key/value side-table (`table` is a fixed literal "param"/"tag").
@@ -63,6 +65,13 @@ pub trait Store: Send + Sync {
         status: &str,
         ended_at: Option<&str>,
     ) -> Result<Option<Run>, sqlx::Error>;
+    /// List runs newest-first, with optional experiment/status filters and a cap.
+    async fn list_runs(
+        &self,
+        experiment_id: Option<&str>,
+        status: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<Run>, sqlx::Error>;
 
     // scalar metrics
     async fn insert_scalar_metrics(
@@ -105,6 +114,46 @@ pub trait Store: Send + Sync {
         size_bytes: Option<i64>,
     ) -> Result<Artifact, sqlx::Error>;
     async fn get_artifacts(&self, run_id: &str) -> Result<Vec<Artifact>, sqlx::Error>;
+
+    // versioned-document registry (Slice 1: Config Registry)
+    async fn get_or_create_document(
+        &self,
+        namespace: &str,
+        name: &str,
+    ) -> Result<Document, sqlx::Error>;
+    async fn get_document(&self, id: &str) -> Result<Option<Document>, sqlx::Error>;
+    async fn list_documents(
+        &self,
+        namespace: Option<&str>,
+        name: Option<&str>,
+    ) -> Result<Vec<Document>, sqlx::Error>;
+    async fn list_versions(&self, document_id: &str) -> Result<Vec<DocumentVersion>, sqlx::Error>;
+    async fn get_version(&self, id: &str) -> Result<Option<DocumentVersion>, sqlx::Error>;
+    /// Publish a content-addressed version. Returns `(version, deduped)`: if the
+    /// same `content_hash` already exists for this document, returns it with
+    /// `deduped=true` (no insert); else inserts `version = max+1`. `canonical_body`
+    /// is the exact text that was hashed.
+    async fn publish_version(
+        &self,
+        document_id: &str,
+        content_hash: &str,
+        canonical_body: &str,
+        parent_version_id: Option<&str>,
+    ) -> Result<(DocumentVersion, bool), sqlx::Error>;
+    /// Link a version to a run under a `role` (idempotent on the PK).
+    async fn link_run_document(
+        &self,
+        run_id: &str,
+        version_id: &str,
+        role: &str,
+    ) -> Result<(), sqlx::Error>;
+    /// Versions a run is linked to, paired with their role; ordered by role.
+    async fn list_run_documents(
+        &self,
+        run_id: &str,
+    ) -> Result<Vec<(String, DocumentVersion)>, sqlx::Error>;
+    /// Reverse lookup: runs launched from a given version, newest-first.
+    async fn list_runs_for_version(&self, version_id: &str) -> Result<Vec<Run>, sqlx::Error>;
 }
 
 /// Columns read back for any curve query (keep in sync with `CurveRow`).
@@ -182,6 +231,7 @@ impl Store for SqliteStore {
         name: Option<&str>,
         params: &HashMap<String, serde_json::Value>,
         tags: &HashMap<String, String>,
+        config_version_id: Option<&str>,
     ) -> Result<Run, sqlx::Error> {
         let run = Run {
             id: new_id(),
@@ -219,6 +269,15 @@ impl Store for SqliteStore {
                 .bind(&run.id)
                 .bind(k)
                 .bind(v)
+                .execute(&mut *tx)
+                .await?;
+        }
+
+        // Inline config link: same transaction as the run, role 'config'.
+        if let Some(vid) = config_version_id {
+            sqlx::query("INSERT INTO run_document (run_id, version_id, role) VALUES (?, ?, 'config')")
+                .bind(&run.id)
+                .bind(vid)
                 .execute(&mut *tx)
                 .await?;
         }
@@ -272,6 +331,29 @@ impl Store for SqliteStore {
             return Ok(None);
         }
         self.get_run(id).await
+    }
+
+    async fn list_runs(
+        &self,
+        experiment_id: Option<&str>,
+        status: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<Run>, sqlx::Error> {
+        // `(? IS NULL OR col = ?)` makes each filter optional with one query.
+        sqlx::query_as::<_, Run>(
+            "SELECT id, experiment_id, name, status, started_at, ended_at FROM run
+             WHERE (? IS NULL OR experiment_id = ?)
+               AND (? IS NULL OR status = ?)
+             ORDER BY started_at DESC, id DESC
+             LIMIT ?",
+        )
+        .bind(experiment_id)
+        .bind(experiment_id)
+        .bind(status)
+        .bind(status)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
     }
 
     // ----- scalar metrics -----------------------------------------------------
@@ -443,6 +525,194 @@ impl Store for SqliteStore {
         .fetch_all(&self.pool)
         .await
     }
+
+    // ----- versioned-document registry ----------------------------------------
+    async fn get_or_create_document(
+        &self,
+        namespace: &str,
+        name: &str,
+    ) -> Result<Document, sqlx::Error> {
+        let doc = Document {
+            id: new_id(),
+            namespace: namespace.to_string(),
+            name: name.to_string(),
+            created_at: now(),
+        };
+        sqlx::query(
+            "INSERT INTO document (id, namespace, name, created_at) VALUES (?, ?, ?, ?)
+             ON CONFLICT(namespace, name) DO NOTHING",
+        )
+        .bind(&doc.id)
+        .bind(&doc.namespace)
+        .bind(&doc.name)
+        .bind(&doc.created_at)
+        .execute(&self.pool)
+        .await?;
+
+        // Re-read so we return the winner's row regardless of who inserted.
+        sqlx::query_as::<_, Document>(
+            "SELECT id, namespace, name, created_at FROM document
+             WHERE namespace = ? AND name = ?",
+        )
+        .bind(namespace)
+        .bind(name)
+        .fetch_one(&self.pool)
+        .await
+    }
+
+    async fn get_document(&self, id: &str) -> Result<Option<Document>, sqlx::Error> {
+        sqlx::query_as::<_, Document>(
+            "SELECT id, namespace, name, created_at FROM document WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+    }
+
+    async fn list_documents(
+        &self,
+        namespace: Option<&str>,
+        name: Option<&str>,
+    ) -> Result<Vec<Document>, sqlx::Error> {
+        sqlx::query_as::<_, Document>(
+            "SELECT id, namespace, name, created_at FROM document
+             WHERE (? IS NULL OR namespace = ?)
+               AND (? IS NULL OR name = ?)
+             ORDER BY namespace ASC, name ASC",
+        )
+        .bind(namespace)
+        .bind(namespace)
+        .bind(name)
+        .bind(name)
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    async fn list_versions(&self, document_id: &str) -> Result<Vec<DocumentVersion>, sqlx::Error> {
+        sqlx::query_as::<_, DocumentVersion>(
+            "SELECT id, document_id, version, content_hash, body, parent_version_id, created_at
+             FROM document_version WHERE document_id = ? ORDER BY version ASC",
+        )
+        .bind(document_id)
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    async fn get_version(&self, id: &str) -> Result<Option<DocumentVersion>, sqlx::Error> {
+        sqlx::query_as::<_, DocumentVersion>(
+            "SELECT id, document_id, version, content_hash, body, parent_version_id, created_at
+             FROM document_version WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+    }
+
+    async fn publish_version(
+        &self,
+        document_id: &str,
+        content_hash: &str,
+        canonical_body: &str,
+        parent_version_id: Option<&str>,
+    ) -> Result<(DocumentVersion, bool), sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+
+        // Per-document dedup: identical content reuses the existing version.
+        if let Some(existing) = sqlx::query_as::<_, DocumentVersion>(
+            "SELECT id, document_id, version, content_hash, body, parent_version_id, created_at
+             FROM document_version WHERE document_id = ? AND content_hash = ?",
+        )
+        .bind(document_id)
+        .bind(content_hash)
+        .fetch_optional(&mut *tx)
+        .await?
+        {
+            return Ok((existing, true));
+        }
+
+        let next: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(MAX(version), 0) + 1 FROM document_version WHERE document_id = ?",
+        )
+        .bind(document_id)
+        .fetch_one(&mut *tx)
+        .await?;
+
+        let dv = DocumentVersion {
+            id: new_id(),
+            document_id: document_id.to_string(),
+            version: next,
+            content_hash: content_hash.to_string(),
+            body: canonical_body.to_string(),
+            parent_version_id: parent_version_id.map(|s| s.to_string()),
+            created_at: now(),
+        };
+        sqlx::query(
+            "INSERT INTO document_version
+                 (id, document_id, version, content_hash, body, parent_version_id, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&dv.id)
+        .bind(&dv.document_id)
+        .bind(dv.version)
+        .bind(&dv.content_hash)
+        .bind(&dv.body)
+        .bind(&dv.parent_version_id)
+        .bind(&dv.created_at)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        Ok((dv, false))
+    }
+
+    async fn link_run_document(
+        &self,
+        run_id: &str,
+        version_id: &str,
+        role: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO run_document (run_id, version_id, role) VALUES (?, ?, ?)
+             ON CONFLICT(run_id, role, version_id) DO NOTHING",
+        )
+        .bind(run_id)
+        .bind(version_id)
+        .bind(role)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn list_run_documents(
+        &self,
+        run_id: &str,
+    ) -> Result<Vec<(String, DocumentVersion)>, sqlx::Error> {
+        let links: Vec<(String, String)> = sqlx::query_as(
+            "SELECT role, version_id FROM run_document WHERE run_id = ? ORDER BY role ASC",
+        )
+        .bind(run_id)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut out = Vec::with_capacity(links.len());
+        for (role, vid) in links {
+            if let Some(dv) = self.get_version(&vid).await? {
+                out.push((role, dv));
+            }
+        }
+        Ok(out)
+    }
+
+    async fn list_runs_for_version(&self, version_id: &str) -> Result<Vec<Run>, sqlx::Error> {
+        sqlx::query_as::<_, Run>(
+            "SELECT r.id, r.experiment_id, r.name, r.status, r.started_at, r.ended_at
+             FROM run r JOIN run_document rd ON r.id = rd.run_id
+             WHERE rd.version_id = ?
+             ORDER BY r.started_at DESC, r.id DESC",
+        )
+        .bind(version_id)
+        .fetch_all(&self.pool)
+        .await
+    }
 }
 
 /// Postgres-backed `Store` (M8). A near-mirror of `SqliteStore`: same logic and
@@ -517,6 +787,7 @@ impl Store for PgStore {
         name: Option<&str>,
         params: &HashMap<String, serde_json::Value>,
         tags: &HashMap<String, String>,
+        config_version_id: Option<&str>,
     ) -> Result<Run, sqlx::Error> {
         let run = Run {
             id: new_id(),
@@ -556,6 +827,17 @@ impl Store for PgStore {
                 .bind(v)
                 .execute(&mut *tx)
                 .await?;
+        }
+
+        // Inline config link: same transaction as the run, role 'config'.
+        if let Some(vid) = config_version_id {
+            sqlx::query(
+                "INSERT INTO run_document (run_id, version_id, role) VALUES ($1, $2, 'config')",
+            )
+            .bind(&run.id)
+            .bind(vid)
+            .execute(&mut *tx)
+            .await?;
         }
 
         tx.commit().await?;
@@ -607,6 +889,27 @@ impl Store for PgStore {
             return Ok(None);
         }
         self.get_run(id).await
+    }
+
+    async fn list_runs(
+        &self,
+        experiment_id: Option<&str>,
+        status: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<Run>, sqlx::Error> {
+        // Casts give each NULL param an unambiguous type ($1/$2 reused).
+        sqlx::query_as::<_, Run>(
+            "SELECT id, experiment_id, name, status, started_at, ended_at FROM run
+             WHERE ($1::text IS NULL OR experiment_id = $1::text)
+               AND ($2::text IS NULL OR status = $2::text)
+             ORDER BY started_at DESC, id DESC
+             LIMIT $3",
+        )
+        .bind(experiment_id)
+        .bind(status)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
     }
 
     // ----- scalar metrics -----------------------------------------------------
@@ -771,6 +1074,191 @@ impl Store for PgStore {
              FROM artifact WHERE run_id = $1 ORDER BY created_at ASC, id ASC",
         )
         .bind(run_id)
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    // ----- versioned-document registry ----------------------------------------
+    async fn get_or_create_document(
+        &self,
+        namespace: &str,
+        name: &str,
+    ) -> Result<Document, sqlx::Error> {
+        let doc = Document {
+            id: new_id(),
+            namespace: namespace.to_string(),
+            name: name.to_string(),
+            created_at: now(),
+        };
+        sqlx::query(
+            "INSERT INTO document (id, namespace, name, created_at) VALUES ($1, $2, $3, $4)
+             ON CONFLICT (namespace, name) DO NOTHING",
+        )
+        .bind(&doc.id)
+        .bind(&doc.namespace)
+        .bind(&doc.name)
+        .bind(&doc.created_at)
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query_as::<_, Document>(
+            "SELECT id, namespace, name, created_at FROM document
+             WHERE namespace = $1 AND name = $2",
+        )
+        .bind(namespace)
+        .bind(name)
+        .fetch_one(&self.pool)
+        .await
+    }
+
+    async fn get_document(&self, id: &str) -> Result<Option<Document>, sqlx::Error> {
+        sqlx::query_as::<_, Document>(
+            "SELECT id, namespace, name, created_at FROM document WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+    }
+
+    async fn list_documents(
+        &self,
+        namespace: Option<&str>,
+        name: Option<&str>,
+    ) -> Result<Vec<Document>, sqlx::Error> {
+        // Casts give each NULL param an unambiguous type ($1/$2 reused).
+        sqlx::query_as::<_, Document>(
+            "SELECT id, namespace, name, created_at FROM document
+             WHERE ($1::text IS NULL OR namespace = $1::text)
+               AND ($2::text IS NULL OR name = $2::text)
+             ORDER BY namespace ASC, name ASC",
+        )
+        .bind(namespace)
+        .bind(name)
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    async fn list_versions(&self, document_id: &str) -> Result<Vec<DocumentVersion>, sqlx::Error> {
+        sqlx::query_as::<_, DocumentVersion>(
+            "SELECT id, document_id, version, content_hash, body, parent_version_id, created_at
+             FROM document_version WHERE document_id = $1 ORDER BY version ASC",
+        )
+        .bind(document_id)
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    async fn get_version(&self, id: &str) -> Result<Option<DocumentVersion>, sqlx::Error> {
+        sqlx::query_as::<_, DocumentVersion>(
+            "SELECT id, document_id, version, content_hash, body, parent_version_id, created_at
+             FROM document_version WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+    }
+
+    async fn publish_version(
+        &self,
+        document_id: &str,
+        content_hash: &str,
+        canonical_body: &str,
+        parent_version_id: Option<&str>,
+    ) -> Result<(DocumentVersion, bool), sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+
+        if let Some(existing) = sqlx::query_as::<_, DocumentVersion>(
+            "SELECT id, document_id, version, content_hash, body, parent_version_id, created_at
+             FROM document_version WHERE document_id = $1 AND content_hash = $2",
+        )
+        .bind(document_id)
+        .bind(content_hash)
+        .fetch_optional(&mut *tx)
+        .await?
+        {
+            return Ok((existing, true));
+        }
+
+        let next: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(MAX(version), 0) + 1 FROM document_version WHERE document_id = $1",
+        )
+        .bind(document_id)
+        .fetch_one(&mut *tx)
+        .await?;
+
+        let dv = DocumentVersion {
+            id: new_id(),
+            document_id: document_id.to_string(),
+            version: next,
+            content_hash: content_hash.to_string(),
+            body: canonical_body.to_string(),
+            parent_version_id: parent_version_id.map(|s| s.to_string()),
+            created_at: now(),
+        };
+        sqlx::query(
+            "INSERT INTO document_version
+                 (id, document_id, version, content_hash, body, parent_version_id, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        )
+        .bind(&dv.id)
+        .bind(&dv.document_id)
+        .bind(dv.version)
+        .bind(&dv.content_hash)
+        .bind(&dv.body)
+        .bind(&dv.parent_version_id)
+        .bind(&dv.created_at)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        Ok((dv, false))
+    }
+
+    async fn link_run_document(
+        &self,
+        run_id: &str,
+        version_id: &str,
+        role: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO run_document (run_id, version_id, role) VALUES ($1, $2, $3)
+             ON CONFLICT (run_id, role, version_id) DO NOTHING",
+        )
+        .bind(run_id)
+        .bind(version_id)
+        .bind(role)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn list_run_documents(
+        &self,
+        run_id: &str,
+    ) -> Result<Vec<(String, DocumentVersion)>, sqlx::Error> {
+        let links: Vec<(String, String)> = sqlx::query_as(
+            "SELECT role, version_id FROM run_document WHERE run_id = $1 ORDER BY role ASC",
+        )
+        .bind(run_id)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut out = Vec::with_capacity(links.len());
+        for (role, vid) in links {
+            if let Some(dv) = self.get_version(&vid).await? {
+                out.push((role, dv));
+            }
+        }
+        Ok(out)
+    }
+
+    async fn list_runs_for_version(&self, version_id: &str) -> Result<Vec<Run>, sqlx::Error> {
+        sqlx::query_as::<_, Run>(
+            "SELECT r.id, r.experiment_id, r.name, r.status, r.started_at, r.ended_at
+             FROM run r JOIN run_document rd ON r.id = rd.run_id
+             WHERE rd.version_id = $1
+             ORDER BY r.started_at DESC, r.id DESC",
+        )
+        .bind(version_id)
         .fetch_all(&self.pool)
         .await
     }

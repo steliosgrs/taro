@@ -113,6 +113,19 @@ class Run:
         except TaroHTTPError as e:  # never-crash
             log.warning("taro: failed to register artifact '%s' (%s)", name, e)
 
+    def link_document(self, version_id: str, role: str = "config") -> None:
+        """Link a registered document version to this run (e.g. a config). The
+        inline `start_run(config_version_id=...)` path covers the common case;
+        this links after the fact or under another `role`. Idempotent server-side."""
+        if not self.ok:
+            return
+        try:
+            self.client.post(
+                f"/runs/{self.run_id}/documents", {"version_id": version_id, "role": role}
+            )
+        except TaroHTTPError as e:  # never-crash
+            log.warning("taro: failed to link document %s (%s)", version_id, e)
+
     # ----- lifecycle ----------------------------------------------------------
     def finish(self, status: str = "finished") -> None:
         if not self.ok:

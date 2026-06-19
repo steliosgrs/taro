@@ -2,10 +2,14 @@
 
 use crate::{error::AppError, models::*, state::AppState};
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     Json,
 };
+
+/// Default page size for `GET /runs`, and the hard cap on a client-supplied limit.
+const DEFAULT_LIMIT: i64 = 100;
+const MAX_LIMIT: i64 = 1000;
 
 /// POST /api/v1/runs — start a run (get-or-creates the experiment by name).
 pub async fn create(
@@ -17,10 +21,26 @@ pub async fn create(
         return Err(AppError::BadRequest("experiment is required".into()));
     }
 
+    // Validate the inline config link up front so a bad id is a clean 400, not
+    // an FK violation surfacing as a 500 inside create_run's transaction.
+    if let Some(vid) = body.config_version_id.as_deref() {
+        if st.store.get_version(vid).await?.is_none() {
+            return Err(AppError::BadRequest(format!(
+                "config_version_id '{vid}' not found"
+            )));
+        }
+    }
+
     let exp = st.store.get_or_create_experiment(exp_name).await?;
     let run = st
         .store
-        .create_run(&exp.id, body.name.as_deref(), &body.params, &body.tags)
+        .create_run(
+            &exp.id,
+            body.name.as_deref(),
+            &body.params,
+            &body.tags,
+            body.config_version_id.as_deref(),
+        )
         .await?;
 
     Ok((
@@ -31,6 +51,24 @@ pub async fn create(
             status: run.status,
         }),
     ))
+}
+
+/// GET /api/v1/runs — list runs newest-first; optional `?experiment_id=&status=&limit=`.
+pub async fn list(
+    State(st): State<AppState>,
+    Query(q): Query<ListRunsQuery>,
+) -> Result<Json<Vec<Run>>, AppError> {
+    if let Some(s) = q.status.as_deref() {
+        if !is_valid_status(s) {
+            return Err(AppError::BadRequest(format!("invalid status '{s}'")));
+        }
+    }
+    let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
+    let runs = st
+        .store
+        .list_runs(q.experiment_id.as_deref(), q.status.as_deref(), limit)
+        .await?;
+    Ok(Json(runs))
 }
 
 /// GET /api/v1/runs/{id} — run detail incl. params and tags.

@@ -30,6 +30,16 @@ Config (env vars, all optional — see `server/.env.example`):
 Checks: `cargo build`, `cargo clippy`. Migrations in `server/migrations/` run
 automatically on startup.
 
+## Docker (M11)
+
+One-command playground: `docker compose --profile seed up --build` brings up the
+server + Postgres and loads two demo runs (the Iris example). Drop `--profile
+seed` for an empty server; `docker compose down -v` wipes volumes. The server
+image (`server/Dockerfile`) is multi-stage and self-contained — migrations are
+embedded into the binary at compile time, so the runtime image ships no SQL and
+the build needs no database. Compose wires Postgres; a bare `docker run` of the
+image falls back to SQLite under `/data`. Seed image: `clients/python/Dockerfile`.
+
 ## Python SDK
 
 ```bash
@@ -41,12 +51,18 @@ uv venv && uv pip install -e .          # core is stdlib-only, zero deps
 ```python
 import taro
 taro.init("http://localhost:8080")
-with taro.start_run("exp", params={"lr0": 0.01}) as run:
+cfg = taro.register_config("yolo-baseline", {"lr0": 0.01, "epochs": 100})  # M13; returns a version id
+with taro.start_run("exp", params={"lr0": 0.01}, config_version_id=cfg) as run:
     run.log_metric("mAP50", 0.64, step=50)
     run.log_curve("pr_curve", x=recall, y=precision, step=50, curve_type="pr")
     run.log_artifact("weights/best.pt")
 overlay = taro.compare_curves([a, b], key="pr_curve")   # data, not a PNG
 ```
+
+`register_config` is the soft default for the config registry (M13): optional and
+never-crash (returns `None` on failure → the run just starts un-linked); identical
+content is deduped server-side, so calling it every run is cheap. The config is the
+run's structured source of record, separate from free `params`.
 
 Smoke test: `python examples/validate_m3.py` (needs the server up).
 
@@ -61,18 +77,34 @@ emits the raw response. Source: `clients/python/taro/cli.py`.
 ```bash
 taro health
 taro experiments list                       # also: experiments create <name> | get <id>
+taro runs list [--experiment ID] [--status S] [--limit N]   # newest-first (M12)
 taro runs get <id>                          # detail incl. params + tags
+taro runs diff <run_a> <run_b>              # params/tags/latest-metric diff (M12)
 taro runs metrics <id> [--key K]            # scalar series
 taro runs curves <id> [--key K] [--step S]  # curve metrics
 taro runs artifacts <id>
+taro runs documents <id>                    # configs linked to a run (M13)
 taro compare A,B --key pr_curve             # the overlay, as a table
+taro documents list [--namespace N] [--name X]   # config registry (M13)
+taro documents get <id>                     # handle + version history
+taro documents create <namespace> <name>    # also: publish <id> <body.json> [--parent V]
+taro versions get <id>                      # version detail incl. body
+taro versions runs <id>                     # reverse: runs launched from a version
 ```
 
 ## REST API (`/api/v1`, frozen wire contract — see `docs/poc-design.md §4`)
 
-`POST /experiments` · `POST /runs` · `PATCH /runs/{id}` · `GET /runs/{id}` ·
+`POST /experiments` · `POST /runs` ·
+`GET /runs?experiment_id=&status=&limit=` (list, newest-first; M12) ·
+`PATCH /runs/{id}` · `GET /runs/{id}` ·
 `POST|GET /runs/{id}/metrics` (scalar) · `POST|GET /runs/{id}/curves` ·
 `POST|GET /runs/{id}/artifacts` · `GET /curves/compare?run_ids=A,B&key=&step=latest`.
+
+Config registry (M13): `POST|GET /documents` (`?namespace=&name=`) ·
+`GET /documents/{id}` (+ versions) · `POST /documents/{id}/versions` (publish,
+content-addressed/deduped) · `GET /versions/{id}` · `GET /versions/{id}/runs`
+(reverse lookup) · `POST|GET /runs/{id}/documents` (link/list). A run may also be
+linked inline via `config_version_id` on `POST /runs`.
 
 ## Conventions & invariants
 
@@ -86,6 +118,14 @@ taro compare A,B --key pr_curve             # the overlay, as a table
   Curves validate **structure only** (equal lengths, finite) — never ML correctness.
 - Artifacts: DB stores metadata only (`name/uri/media_type/size`); bytes go to the
   `BlobStore` (`LocalFs` now, S3 later).
+- **Config registry** (M13): a `document` is a named handle in an open-enum
+  `namespace` (`config` now; `dataset` is the planned Slice 2); a `document_version`
+  is an **immutable, content-addressed** snapshot (sha256 of the canonical-JSON
+  `body`; re-publishing identical content is deduped, not re-versioned). The `body`
+  is **opaque JSON validated for structure only** (must be an object) — the server
+  never interprets it. `run_document` links a version to a run under a `role`,
+  giving provenance both ways. Configs **coexist with** `param`: params stay the
+  flattened queryable index; the linked version is the structured source.
 - SDK is **never-crash**: tracking failures warn and continue; an unreachable
   server yields a degraded no-op `Run` (`run.ok is False`). Training must never die
   because of logging.
@@ -94,14 +134,20 @@ taro compare A,B --key pr_curve             # the overlay, as a table
 
 ## Status
 
-POC milestones **M0–M9 complete**: wire contract, server skeleton, scalar path,
+POC milestones **M0–M13 complete**: wire contract, server skeleton, scalar path,
 curve path + `/curves/compare`, Python SDK, artifacts + blob store, Ultralytics
-adapter, integration test suite (M7), `PostgresStore` engine parity (M8), and
+adapter, integration test suite (M7), `PostgresStore` engine parity (M8),
 **streaming artifact upload** (M9 — request body flows to the `BlobStore` chunk
-by chunk; the SDK streams the file handle, never reading it whole), and the
-**`taro` CLI** (M10 — read/inspect client in the SDK; see the CLI section above).
-Data access is behind the `Store` trait (`src/store.rs`); both `SqliteStore` and
-`PostgresStore` are proven at parity. A UI is post-POC. Airflow orchestration is
+by chunk; the SDK streams the file handle, never reading it whole), the
+**`taro` CLI** (M10 — read/inspect client in the SDK; see the CLI section above),
+**Docker packaging** (M11 — compose stack + demo seed; see the Docker section), and
+the **run-listing endpoint + CLI character features** (M12 — `GET /runs` with
+experiment/status/limit filters; CLI `runs list` and `runs diff`), and the
+**config registry** (M13 — Slice 1 of the versioned-document registry epic:
+`document`/`document_version`/`run_document`, content-addressed publish, inline +
+endpoint run linking, SDK `register_config`, CLI `documents`/`versions`; Slice 2 =
+Dataset Recipes, future). Data access is behind the `Store` trait (`src/store.rs`);
+both `SqliteStore` and `PostgresStore` are proven at parity. A UI is post-POC. Airflow orchestration is
 explicitly **out of scope** (the server must never orchestrate — see
 `docs/airflow-integration.md`).
 

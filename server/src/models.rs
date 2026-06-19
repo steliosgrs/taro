@@ -49,6 +49,10 @@ pub struct CreateRun {
     pub params: HashMap<String, serde_json::Value>,
     #[serde(default)]
     pub tags: HashMap<String, String>,
+    /// Optional config-registry version this run was launched from; linked with
+    /// `role='config'` in the same transaction as the run insert.
+    #[serde(default)]
+    pub config_version_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -56,6 +60,14 @@ pub struct CreateRunResponse {
     pub run_id: String,
     pub experiment_id: String,
     pub status: String,
+}
+
+/// Query filters for `GET /runs`. All optional; `limit` defaults + caps in the handler.
+#[derive(Debug, Deserialize)]
+pub struct ListRunsQuery {
+    pub experiment_id: Option<String>,
+    pub status: Option<String>,
+    pub limit: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -175,4 +187,58 @@ pub struct ArtifactRegister {
     pub uri: String,
     pub media_type: Option<String>,
     pub size_bytes: Option<i64>,
+}
+
+// ----- versioned-document registry DTOs (Slice 1: Config Registry) ------------
+/// A named handle in a `namespace` — the registry entry a run's config lives under.
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct Document {
+    pub id: String,
+    pub namespace: String,
+    pub name: String,
+    pub created_at: String,
+}
+
+/// An immutable, content-addressed snapshot of a document. `body` is the raw JSON
+/// text column (handlers parse it back to nested JSON for responses, like curves).
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct DocumentVersion {
+    pub id: String,
+    pub document_id: String,
+    pub version: i64,
+    pub content_hash: String,
+    pub body: String,
+    pub parent_version_id: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateDocument {
+    pub namespace: String,
+    pub name: String,
+}
+
+/// Publish a new version. `body` is opaque JSON (validated for structure only);
+/// `parent_version_id` records lineage (a variation derived from another version).
+#[derive(Debug, Deserialize)]
+pub struct PublishVersion {
+    pub body: serde_json::Value,
+    #[serde(default)]
+    pub parent_version_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PublishVersionResponse {
+    pub version_id: String,
+    pub version: i64,
+    pub content_hash: String,
+    /// True when identical content already existed: no new version was created.
+    pub deduped: bool,
+}
+
+/// Link an existing document version to a run under a `role` (e.g. `config`).
+#[derive(Debug, Deserialize)]
+pub struct LinkDocument {
+    pub version_id: String,
+    pub role: String,
 }

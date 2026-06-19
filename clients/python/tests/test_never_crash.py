@@ -35,8 +35,17 @@ def test_logging_on_degraded_run_is_noop():
     run.log_curve("pr", x=[0.0, 1.0], y=[1.0, 0.5], step=0, curve_type="pr")
     run.log_artifact("/no/such/file.pt")
     run.register_artifact("weights", "s3://bucket/best.pt")
+    run.link_document("ver-1")  # degraded → no-op, no request attempted
     run.finish()  # no batcher to flush, no PATCH attempted
     assert run.ok is False
+
+
+def test_register_config_returns_none_when_server_down():
+    taro.init(DEAD_URL, timeout=0.5)
+    # Soft default + never-crash: a registry outage must not raise; it returns
+    # None so the run simply starts un-linked.
+    vid = taro.register_config("yolo-baseline", {"lr0": 0.01})
+    assert vid is None
 
 
 def test_log_artifact_missing_file_warns(caplog):

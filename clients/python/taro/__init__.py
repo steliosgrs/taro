@@ -12,12 +12,20 @@ only call these methods. Artifacts arrive in M5.
 """
 
 import logging
-from typing import Optional, Sequence
+from typing import Any, Optional, Sequence
 
 from ._client import Client, TaroHTTPError
 from .run import Run
 
-__all__ = ["init", "start_run", "compare_curves", "Run", "Client", "TaroHTTPError"]
+__all__ = [
+    "init",
+    "start_run",
+    "register_config",
+    "compare_curves",
+    "Run",
+    "Client",
+    "TaroHTTPError",
+]
 
 log = logging.getLogger("taro")
 
@@ -42,28 +50,64 @@ def _require_client(client: Optional[Client]) -> Client:
     return c
 
 
+def register_config(
+    name: str,
+    body: dict,
+    *,
+    namespace: str = "config",
+    parent_version_id: Optional[str] = None,
+    client: Optional[Client] = None,
+) -> Optional[str]:
+    """Register a config in the versioned-document registry and return its
+    version id (pass it to `start_run(config_version_id=...)`).
+
+    Get-or-creates the `(namespace, name)` handle and publishes `body` as a new,
+    content-addressed version — re-registering identical content is idempotent
+    (the server returns the existing version, no duplicate). Soft default: this is
+    optional. Never-crash — on any failure it warns and returns `None`, so a run
+    started with that `None` is simply un-linked rather than blocked.
+    """
+    c = _require_client(client)
+    try:
+        doc = c.post("/documents", {"namespace": namespace, "name": name})
+        payload: dict = {"body": body}
+        if parent_version_id is not None:
+            payload["parent_version_id"] = parent_version_id
+        version = c.post(f"/documents/{doc['id']}/versions", payload)
+        return version["version_id"]
+    except (TaroHTTPError, KeyError) as e:
+        log.warning("taro: could not register config '%s' (%s); continuing without it", name, e)
+        return None
+
+
 def start_run(
     experiment: str,
     name: Optional[str] = None,
     params: Optional[dict] = None,
     tags: Optional[dict] = None,
     *,
+    config_version_id: Optional[str] = None,
     client: Optional[Client] = None,
     batch_size: int = 100,
     interval: float = 5.0,
 ) -> Run:
     """Start (and get-or-create the experiment for) a run.
 
+    `config_version_id` (from `register_config`) links the run to a registered
+    config — the run's structured source of record, separate from free `params`.
+
     Never-crash: if the server is unreachable, returns a degraded no-op `Run`
     (`run.ok is False`) instead of raising, so training proceeds untracked.
     """
     c = _require_client(client)
-    body = {
+    body: dict[str, Any] = {
         "experiment": experiment,
         "name": name,
         "params": params or {},
         "tags": tags or {},
     }
+    if config_version_id is not None:
+        body["config_version_id"] = config_version_id
     try:
         resp = c.post("/runs", body)
         return Run(

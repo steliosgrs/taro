@@ -88,3 +88,28 @@ def test_start_run_passes_config_version_id_inline():
 
     run_post = next(b for p, b in client.posts if p == "/runs")
     assert run_post["config_version_id"] == "ver-1"
+
+
+def test_register_dataset_builds_recipe_body_with_lineage():
+    client = ConfigRecordingClient()
+    vid = taro.register_dataset(
+        "coco-vehicles",
+        base={"manifest_hash": "sha256:abc", "uri": "s3://data/coco"},
+        ops=[{"op": "mosaic", "p": 0.5}],
+        parent_version_id="ver-base",
+        client=client,
+    )
+
+    assert vid == "ver-1"
+    # Same primitive as config, only the namespace and the {base, ops} shape differ.
+    assert client.posts[0] == ("/documents", {"namespace": "dataset", "name": "coco-vehicles"})
+    assert client.posts[1] == (
+        "/documents/doc-1/versions",
+        {
+            "body": {
+                "base": {"manifest_hash": "sha256:abc", "uri": "s3://data/coco"},
+                "ops": [{"op": "mosaic", "p": 0.5}],
+            },
+            "parent_version_id": "ver-base",
+        },
+    )

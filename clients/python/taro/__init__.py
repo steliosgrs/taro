@@ -21,6 +21,7 @@ __all__ = [
     "init",
     "start_run",
     "register_config",
+    "register_dataset",
     "compare_curves",
     "Run",
     "Client",
@@ -50,6 +51,32 @@ def _require_client(client: Optional[Client]) -> Client:
     return c
 
 
+def _register_document(
+    name: str,
+    body: dict,
+    *,
+    namespace: str,
+    parent_version_id: Optional[str],
+    client: Optional[Client],
+    kind: str,
+) -> Optional[str]:
+    """Get-or-create the `(namespace, name)` handle and publish `body` as a new,
+    content-addressed version; returns the version id. Shared by the typed
+    `register_config` / `register_dataset` helpers — never-crash (warns and
+    returns `None` on any failure, so the run is simply un-linked)."""
+    c = _require_client(client)
+    try:
+        doc = c.post("/documents", {"namespace": namespace, "name": name})
+        payload: dict = {"body": body}
+        if parent_version_id is not None:
+            payload["parent_version_id"] = parent_version_id
+        version = c.post(f"/documents/{doc['id']}/versions", payload)
+        return version["version_id"]
+    except (TaroHTTPError, KeyError) as e:
+        log.warning("taro: could not register %s '%s' (%s); continuing without it", kind, name, e)
+        return None
+
+
 def register_config(
     name: str,
     body: dict,
@@ -67,17 +94,37 @@ def register_config(
     optional. Never-crash — on any failure it warns and returns `None`, so a run
     started with that `None` is simply un-linked rather than blocked.
     """
-    c = _require_client(client)
-    try:
-        doc = c.post("/documents", {"namespace": namespace, "name": name})
-        payload: dict = {"body": body}
-        if parent_version_id is not None:
-            payload["parent_version_id"] = parent_version_id
-        version = c.post(f"/documents/{doc['id']}/versions", payload)
-        return version["version_id"]
-    except (TaroHTTPError, KeyError) as e:
-        log.warning("taro: could not register config '%s' (%s); continuing without it", name, e)
-        return None
+    return _register_document(
+        name, body, namespace=namespace,
+        parent_version_id=parent_version_id, client=client, kind="config",
+    )
+
+
+def register_dataset(
+    name: str,
+    base: dict,
+    ops: Optional[Sequence[dict]] = None,
+    *,
+    namespace: str = "dataset",
+    parent_version_id: Optional[str] = None,
+    client: Optional[Client] = None,
+) -> Optional[str]:
+    """Register a dataset *recipe* (registry Slice 2) and return its version id;
+    link it to a run with `run.link_document(version_id, role="dataset")`.
+
+    A recipe is the declarative body `{"base": base, "ops": [...]}`: `base`
+    identifies the source data (e.g. `{"manifest_hash": ..., "uri": ...}`) and
+    `ops` is the ordered list of transforms applied to it. Pass `parent_version_id`
+    to record a variation-of-a-variation (the lineage DAG). The server stores the
+    recipe as opaque data and **never executes it** — applying the recipe is an
+    adapter's job; a recipe captures intent + pinned base/seed, not bit-exact
+    bytes. Same soft-default, never-crash posture as `register_config`.
+    """
+    body = {"base": base, "ops": list(ops or [])}
+    return _register_document(
+        name, body, namespace=namespace,
+        parent_version_id=parent_version_id, client=client, kind="dataset",
+    )
 
 
 def start_run(

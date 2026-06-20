@@ -230,6 +230,66 @@ async fn list_documents_filters_by_namespace() {
     assert_eq!(configs[0]["namespace"], "config");
 }
 
+/// Slice 2: a dataset *recipe* is the same primitive under `namespace='dataset'`
+/// — a `{base, ops}` body, a `parent_version_id` lineage edge (variation-of-a-
+/// variation), and a run link under `role='dataset'`. No server code is specific
+/// to it; this guards that the generic registry serves the on-brand use case.
+#[tokio::test]
+async fn dataset_recipe_lineage_and_run_provenance() {
+    let app = TestApp::spawn().await;
+
+    let (status, doc) = app
+        .post("/api/v1/documents", json!({"namespace": "dataset", "name": "coco-vehicles"}))
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let doc_id = doc["id"].as_str().unwrap();
+    let url = format!("/api/v1/documents/{doc_id}/versions");
+
+    // Base recipe: source data, no ops.
+    let (_, base) = app
+        .post(&url, json!({"body": {
+            "base": {"manifest_hash": "sha256:abc", "uri": "s3://data/coco"},
+            "ops": []
+        }}))
+        .await;
+    let base_id = base["version_id"].as_str().unwrap().to_string();
+
+    // Variation-of-a-variation: adds an augmentation op, lineage points at base.
+    let (_, child) = app
+        .post(&url, json!({"body": {
+            "base": {"manifest_hash": "sha256:abc", "uri": "s3://data/coco"},
+            "ops": [{"op": "mosaic", "p": 0.5}]
+        }, "parent_version_id": base_id}))
+        .await;
+    let child_id = child["version_id"].as_str().unwrap().to_string();
+
+    // Lineage edge + recipe body round-trip as nested JSON.
+    let (_, out) = app.get(&format!("/api/v1/versions/{child_id}")).await;
+    assert_eq!(out["parent_version_id"], base_id);
+    assert_eq!(out["body"]["ops"][0]["op"], "mosaic");
+
+    // Link to a run under role 'dataset' (endpoint path; inline config_version_id
+    // is config-only by design).
+    let (_, run) = app.post("/api/v1/runs", json!({"experiment": "exp"})).await;
+    let run_id = run["run_id"].as_str().unwrap().to_string();
+    let link_url = format!("/api/v1/runs/{run_id}/documents");
+    let (status, _) = app
+        .post(&link_url, json!({"version_id": child_id, "role": "dataset"}))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    // Forward provenance: the run's dataset recipe.
+    let (_, docs) = app.get(&link_url).await;
+    let docs = docs.as_array().unwrap();
+    assert_eq!(docs.len(), 1);
+    assert_eq!(docs[0]["role"], "dataset");
+    assert_eq!(docs[0]["id"], child_id);
+
+    // Reverse provenance: the recipe version's runs.
+    let (_, runs) = app.get(&format!("/api/v1/versions/{child_id}/runs")).await;
+    assert_eq!(runs.as_array().unwrap().len(), 1);
+}
+
 #[tokio::test]
 async fn missing_document_and_version_are_404() {
     let app = TestApp::spawn().await;

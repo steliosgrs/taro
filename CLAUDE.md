@@ -52,7 +52,11 @@ uv venv && uv pip install -e .          # core is stdlib-only, zero deps
 import taro
 taro.init("http://localhost:8080")
 cfg = taro.register_config("yolo-baseline", {"lr0": 0.01, "epochs": 100})  # M13; returns a version id
+ds  = taro.register_dataset("coco-vehicles",                               # M14; dataset recipe
+        base={"manifest_hash": "…", "uri": "s3://data/coco"},
+        ops=[{"op": "mosaic", "p": 0.5}])
 with taro.start_run("exp", params={"lr0": 0.01}, config_version_id=cfg) as run:
+    run.link_document(ds, role="dataset")   # recipes link via the role'd endpoint
     run.log_metric("mAP50", 0.64, step=50)
     run.log_curve("pr_curve", x=recall, y=precision, step=50, curve_type="pr")
     run.log_artifact("weights/best.pt")
@@ -63,6 +67,12 @@ overlay = taro.compare_curves([a, b], key="pr_curve")   # data, not a PNG
 never-crash (returns `None` on failure → the run just starts un-linked); identical
 content is deduped server-side, so calling it every run is cheap. The config is the
 run's structured source of record, separate from free `params`.
+`register_dataset` (M14, registry Slice 2) is the same primitive under
+`namespace="dataset"`: it publishes a declarative recipe `{base, ops}` and takes a
+`parent_version_id` for variation-of-a-variation lineage. The server stores the
+recipe as opaque data and **never executes it** (an adapter applies it); recipes
+link to a run via `run.link_document(version_id, role="dataset")` (inline
+`config_version_id` is config-only by design).
 
 Smoke test: `python examples/validate_m3.py` (needs the server up).
 
@@ -118,8 +128,8 @@ linked inline via `config_version_id` on `POST /runs`.
   Curves validate **structure only** (equal lengths, finite) — never ML correctness.
 - Artifacts: DB stores metadata only (`name/uri/media_type/size`); bytes go to the
   `BlobStore` (`LocalFs` now, S3 later).
-- **Config registry** (M13): a `document` is a named handle in an open-enum
-  `namespace` (`config` now; `dataset` is the planned Slice 2); a `document_version`
+- **Document registry** (M13 configs / M14 dataset recipes): a `document` is a
+  named handle in an open-enum `namespace` (`config`, `dataset`); a `document_version`
   is an **immutable, content-addressed** snapshot (sha256 of the canonical-JSON
   `body`; re-publishing identical content is deduped, not re-versioned). The `body`
   is **opaque JSON validated for structure only** (must be an object) — the server
@@ -134,7 +144,7 @@ linked inline via `config_version_id` on `POST /runs`.
 
 ## Status
 
-POC milestones **M0–M13 complete**: wire contract, server skeleton, scalar path,
+POC milestones **M0–M14 complete**: wire contract, server skeleton, scalar path,
 curve path + `/curves/compare`, Python SDK, artifacts + blob store, Ultralytics
 adapter, integration test suite (M7), `PostgresStore` engine parity (M8),
 **streaming artifact upload** (M9 — request body flows to the `BlobStore` chunk
@@ -145,8 +155,12 @@ the **run-listing endpoint + CLI character features** (M12 — `GET /runs` with
 experiment/status/limit filters; CLI `runs list` and `runs diff`), and the
 **config registry** (M13 — Slice 1 of the versioned-document registry epic:
 `document`/`document_version`/`run_document`, content-addressed publish, inline +
-endpoint run linking, SDK `register_config`, CLI `documents`/`versions`; Slice 2 =
-Dataset Recipes, future). Data access is behind the `Store` trait (`src/store.rs`);
+endpoint run linking, SDK `register_config`, CLI `documents`/`versions`), and
+**dataset recipes** (M14 — Slice 2 of that epic: the same primitive under
+`namespace="dataset"`, a declarative `{base, ops}` recipe body with
+`parent_version_id` lineage, linked via `role="dataset"`; SDK `register_dataset`;
+no new server code — the server stores the recipe and never executes it).
+Data access is behind the `Store` trait (`src/store.rs`);
 both `SqliteStore` and `PostgresStore` are proven at parity. A UI is post-POC. Airflow orchestration is
 explicitly **out of scope** (the server must never orchestrate — see
 `docs/airflow-integration.md`).
